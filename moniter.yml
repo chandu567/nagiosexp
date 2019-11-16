@@ -1,0 +1,174 @@
+---
+- hosts: webservers
+  become: yes
+  vars:
+    home_directory: /home/ansible
+  tasks:
+  - name: update package and install apache2
+    apt:
+      name: apache2
+      state: present
+      update_cache: yes
+  - debug:
+      msg: apache2 installed
+      verbosity: 0
+  - name: install php
+    apt:
+      name: "{{ item }}"
+      state: present
+    with_items:
+      - php
+      - libapache2-mod-php
+      - php-mcrypt
+      - php-mysql
+      - php-cli
+  - name: msg for  debug issues
+    debug:
+      msg: package installed
+      verbosity: 0  
+  - name: /etc/apache2/mods-enabled/dir.conf
+    template:
+      src: dir.conf.j2
+      dest: /etc/apache2/mods-enabled/dir.conf
+  - debug:
+      msg: first dir.conf file copied
+      verbosity: 0
+  - name: service restart
+    service:
+      name: apache2
+      state: restarted
+  - debug:
+      msg: apache2 restarted now.
+      verbosity: 0
+  - name: create a login user
+    user:
+      name: nagios
+      password: 'nagios'
+  - name: ensure group "nagcmd"
+    group:
+      name: nagcmd
+      state: present
+  - name: create devops user and assign primary group
+    user:
+      name: nagios
+      group: nagcmd
+  - name: update the apt package
+    apt:
+      update_cache: yes
+  - name: install the required packages
+    apt:
+      name: "{{ item }}"
+      state: present
+    with_items:
+    - build-essential
+    - libgd2-xpm-dev
+    - openssl
+    - libssl-dev
+    - unzip
+  - debug:
+      msg: all package are installed
+      verbosity: 0
+  - name: change home directory
+    command: pwd 
+    register: homedirectory
+  - debug:
+      msg: "{{ homedirectory.stdout}}"
+  - name: showing username
+    command: whoami
+    register: username
+  - debug: 
+      msg: "{{ username.stdout }}"
+  - name: download nagios
+    get_url:
+      url: https://assets.nagios.com/downloads/nagioscore/releases/nagios-4.3.4.tar.gz
+      dest: "{{ home_directory }}"
+  - debug:
+      msg:  "{{ home_directory }}"
+  - name: Extract nagios
+    unarchive:
+      src: https://assets.nagios.com/downloads/nagioscore/releases/nagios-4.3.4.tar.gz
+      dest: "{{ home_directory }}"
+      remote_src: yes
+  - name: change nagios directory
+    shell: ./configure --with-nagios-group=nagios --with-command-group=nagcmd 
+    args:
+      chdir: "{{ home_directory}}/nagios-4.3.4" 
+  - name: compile Nagios with this command
+    shell: |
+      make all
+      make install
+      make install-commandmode
+      make install-init
+      make install-config
+    args:
+      chdir: "{{ home_directory}}/nagios-4.3.4" 
+      creates: file
+  - name: web interface, so copy the sample Apache configuration file
+    shell:
+      /usr/bin/install -c -m 644 sample-config/httpd.conf /etc/apache2/sites-available/nagios.conf
+    args:
+      chdir: "{{ home_directory}}/nagios-4.3.4"
+    run_once: true 
+  - name: Nagios, add the web server user
+    user:
+      name: www-data
+      group: nagcmd
+  - name: download URL for the latest stable release of NRPE
+    get_url: 
+      url: https://github.com/NagiosEnterprises/nrpe/releases/download/nrpe-3.2.1/nrpe-3.2.1.tar.gz
+      dest: "{{home_directory }}"
+      remote_src: yes
+  - name: archive the nrepe here
+    unarchive:
+      src:  "{{home_directory }}/nrpe-3.2.1.tar.gz"
+      dest: "{{home_directory }}"
+      remote_src: yes
+  - name:  check_nrpe plugin
+    shell: |
+      ./configure
+      make check_nrpe
+      make install-plugin
+      exit 0
+    args:
+      chdir: "{{ home_directory}}/nrpe-3.2.1"
+  - name: Nagios configuration file in your text editor
+    lineinfile:
+      path: /usr/local/nagios/etc/nagios.cfg
+      regexp: #cfg_dir=/usr/local/nagios/etc/servers
+      line: cfg_dir=/usr/local/nagios/etc/servers
+  - name: email directive and replace its value with your own email address
+    lineinfile:
+      path: /usr/local/nagios/etc/objects/contacts.cfg
+      regexp: '^email = '
+      line: email= chandu.scm67@gmail.com
+  - name: Nagios service definitions.
+    shell: |
+      a2enmod rewrite
+      a2enmod cgi
+  - name: Add a user to a password file and ensure permissions are set
+    htpasswd:
+      path: /usr/local/nagios/etc/htpasswd.users
+      name: nagiosadmin
+      password: 'chandu1234' 
+  - name: execute first
+    command: ln -s /etc/apache2/sites-available/nagios.conf /etc/apache2/sites-enabled/
+  - name:  # symbols, and add the IP addresses or ranges 
+    template:
+      src: /home/ansible/test/nagios.conf.j2
+      dest: "{{ home_directory }}"
+  - name: restart service apache2
+    service:
+      name: apache2
+      state: restarted
+  - name: ate the nagios.service file and open it in your editor
+    template:
+      src: /home/ansible/test/nagios.service.j2
+      dest: /etc/systemd/system/nagios.service
+  - name: service enable
+    systemd:
+      name: nagios.service
+      enabled: yes
+  - name: service started nagios
+    systemd:
+      state: started
+      name: nagios
